@@ -677,9 +677,9 @@ function resetPlanViews() {
   if (msgs) {
     msgs.innerHTML = `
       <div class="chat-bubble assistant">
-        Hi — I can explain anything on your plan, suggest swaps, and update this
-        planning draft if you don’t like a course. I’m not a substitute for
-        academic advising; confirm changes in SOLAR before you register.
+        Hi — I can explain your plan, suggest swaps, and answer Stony Brook
+        questions like add/drop deadlines, full-time load, and SBCs. I’m a
+        planner, not a substitute for advising — confirm dates in SOLAR before you register.
       </div>`;
   }
   setPage("dashboard");

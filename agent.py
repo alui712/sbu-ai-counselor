@@ -9,6 +9,7 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
+from tools.sbu_knowledge import campus_knowledge
 from tools.prereq_engine import (
     COURSES,
     PREREQ_CLAUSES,
@@ -769,64 +770,117 @@ def build_schedule_deterministically(
         if try_add(code, role, soft_placement=True):
             done_sbcs.update(tags)
 
-    # 4) Optional auto-fill (off by default — SBCs are preference-based).
-    if auto_fill_sbcs:
-        preferred_by_sbc = {
-            "ARTS": "ARH 201",
-            "HUM": "PHI 108",
-            "SBS": "ECO 108",
-        }
-        for sbc_tag, code in preferred_by_sbc.items():
-            if total_credits >= target:
+    # 4) Fill toward the credit target so a draft is a full semester, not 1–2 classes.
+    # Extra major courses only if they are core (not late science-menu fillers).
+    # Remaining credits are suggested SBC electives the student can swap.
+    if total_credits < target:
+        for cand in roadmap:
+            if total_credits >= max(target - 6, 9):
                 break
-            if sbc_tag in done_sbcs:
+            code = cand["course_code"]
+            if code in choice_menu_codes and code not in {
+                _normalize_code(c) for c in (chosen_requirement_courses or [])
+            }:
                 continue
-            if try_add(code, f"sbc:{sbc_tag}", soft_placement=True):
-                done_sbcs.add(sbc_tag)
+            if (
+                int(cand.get("bulletin_position") or 999) >= 12
+                and int(cand.get("unlocks") or 0) < 2
+            ):
+                continue
+            idx = int(cand.get("major_index") or 0)
+            program_name = cand.get("major") or (program_list[idx] if idx < len(program_list) else "")
+            is_minor = idx >= len(major_list)
+            role = (
+                f"{'minor' if is_minor else 'core'}:{program_name}"
+                if program_count > 1
+                else ("minor" if is_minor else "core")
+            )
+            try_add(code, role)
 
-        sbc_fill_order = [
-            tag
-            for tag in [
-                "ARTS",
-                "HUM",
-                "SBS",
-                "TECH",
-                "GLO",
-                "SNW",
-                "USA",
-                "DIV",
-                "ESI",
-                "CER",
-                "STAS",
-            ]
-            if tag not in done_sbcs
+    preferred_by_sbc = {
+        "ARTS": "ARH 201",
+        "HUM": "PHI 108",
+        "SBS": "ECO 108",
+        "GLO": "HIS 104",
+        "USA": "HIS 103",
+        "SNW": "GEO 102",
+    }
+    for sbc_tag, code in preferred_by_sbc.items():
+        if total_credits >= target:
+            break
+        if sbc_tag in done_sbcs:
+            continue
+        if try_add(code, f"sbc:{sbc_tag}", soft_placement=True):
+            done_sbcs.add(sbc_tag)
+
+    sbc_fill_order = [
+        tag
+        for tag in [
+            "ARTS",
+            "HUM",
+            "SBS",
+            "TECH",
+            "GLO",
+            "SNW",
+            "USA",
+            "DIV",
+            "ESI",
+            "CER",
+            "STAS",
         ]
-        taken_or_done = completed | selected_codes
-        while total_credits < target:
-            remaining = target - total_credits
-            room = 17 - total_credits
-            if room <= 0:
+        if tag not in done_sbcs
+    ]
+    taken_or_done = completed | selected_codes
+    stalled = 0
+    while total_credits < target and stalled < 8:
+        remaining = target - total_credits
+        room = 17 - total_credits
+        if room <= 0 or remaining <= 0:
+            break
+        picked = None
+        for sbc_tag in sbc_fill_order or ["ARTS", "HUM", "SBS"]:
+            recs = find_sbc_recommendations(
+                completed_courses=sorted(taken_or_done),
+                target_sbc=sbc_tag,
+                max_credits=min(4, room),
+            )
+            pool = [r for r in recs if r["credits"] <= room]
+            # Prefer a course that fits the leftover credits when close to target.
+            pool.sort(key=lambda r: (0 if r["credits"] <= remaining else 1, r["credits"], r["course_code"]))
+            for rec in pool:
+                if rec["course_code"] in taken_or_done:
+                    continue
+                if try_add(rec["course_code"], f"sbc:{sbc_tag}", soft_placement=True):
+                    picked = rec
+                    taken_or_done = completed | selected_codes
+                    done_sbcs.add(sbc_tag)
+                    if sbc_tag in sbc_fill_order:
+                        sbc_fill_order.remove(sbc_tag)
+                    break
+            if picked:
                 break
-            picked = None
-            for sbc_tag in sbc_fill_order:
+        if not picked:
+            stalled += 1
+            # Allow a second course for an already-covered tag if still short.
+            for sbc_tag in ["ARTS", "HUM", "SBS", "GLO", "USA"]:
                 recs = find_sbc_recommendations(
                     completed_courses=sorted(taken_or_done),
                     target_sbc=sbc_tag,
-                    max_credits=max(remaining, room),
+                    max_credits=min(4, room),
                 )
-                pool = [r for r in recs if r["credits"] <= remaining] or recs
-                for rec in pool:
+                for rec in recs:
                     if rec["course_code"] in taken_or_done:
                         continue
-                    if try_add(rec["course_code"], f"sbc:{sbc_tag}"):
+                    if try_add(rec["course_code"], f"sbc:{sbc_tag}", soft_placement=True):
                         picked = rec
                         taken_or_done = completed | selected_codes
                         done_sbcs.add(sbc_tag)
                         break
                 if picked:
                     break
-            if not picked:
-                break
+        if not picked:
+            break
+        stalled = 0
 
     sbc_gaps = [tag for tag in KNOWN_SBC_TAGS if tag not in done_sbcs]
     return {
@@ -1359,11 +1413,20 @@ def counselor_chat(
 
     system = (
         "You are the SBU AI Academic Counselor for Stony Brook University. "
-        "Help undergraduates understand their semester plan, prerequisites, SBCs, "
-        "majors/minors, and what courses cover. Be concrete and concise.\n\n"
+        "Help undergraduates with their semester plan, courses, SBCs, majors/minors, "
+        "and general Stony Brook academic questions (add/drop deadlines, SOLAR, "
+        "full-time load, withdrawals, GPNC, waitlists, advising).\n\n"
         "Rules:\n"
-        "- Use ONLY the provided intake, schedule, and catalog blurbs. "
-        "Do not invent course codes, titles, or requirements.\n"
+        "- For course codes, titles, credits, and prerequisites, use the catalog "
+        "blurbs and current schedule. Do not invent course codes or titles.\n"
+        "- For university policy (deadlines, add/drop, W grades, tuition liability "
+        "windows, full-time status, waitlists, major changes), use the campus "
+        "knowledge pack. Compare deadlines to the date given in that pack.\n"
+        "- If a detail is not in the knowledge pack, catalog, or schedule, say you "
+        "do not have that official detail and point them to the Registrar calendar, "
+        "Undergraduate Bulletin, SOLAR, or their college advising office. Do not guess.\n"
+        "- Dates in the knowledge pack are Fall 2026 undergraduate unless noted. "
+        "Say they are subject to change and must be confirmed in SOLAR.\n"
         "- If the student dislikes a course, suggest real alternatives from the "
         "catalog blurbs when possible, or ask which SBC/major need they want to keep.\n"
         "- To change the schedule, append ONE fenced JSON block at the end using "
@@ -1375,9 +1438,11 @@ def counselor_chat(
         "- Only include codes that exist in the catalog blurbs or current schedule "
         "unless the student explicitly named a valid SBU code.\n"
         "- If no schedule change is needed, do NOT include a schedule_update block.\n"
-        "- Never claim to enroll the student; you only edit this planning draft."
+        "- Never claim to enroll the student; you only edit this planning draft. "
+        "Adding a class after the published add deadline requires a petition, not this chat."
     )
     human = (
+        f"Campus knowledge:\n{campus_knowledge()}\n\n"
         f"Student intake:\n{intake}\n\n"
         f"Current draft schedule ({schedule.get('total_credits', 0)} credits, "
         f"target {schedule.get('target_credits', 15)}):\n{schedule_block}\n\n"
