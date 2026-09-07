@@ -1,0 +1,23 @@
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# App / scrape artifacts
+chroma_db/
+*.bak
+.DS_Store
+
+# Playwright / browsers (scrape only; not needed at runtime)
+playwright-report/
+test-results/

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sbu-ai-counselor
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/meta
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: PORT
+        value: 8000

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SBU AI Academic Counselor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+            <path
+              d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z"
+              fill="currentColor"
+            />
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <strong>SBU AI Academic Counselor</strong>
+          <span>Stony Brook University · Office of Academic Planning</span>
+        </div>
+      </div>
+
+      <nav class="top-nav" aria-label="Primary">
+        <button type="button" class="nav-link is-active" data-page="dashboard">
+          Dashboard
+        </button>
+        <button type="button" class="nav-link" data-page="plan">My Plan</button>
+        <button type="button" class="nav-link" data-page="history">History</button>
+      </nav>
+
+      <div class="status-pill" title="API ready">
+        <span class="status-dot" aria-hidden="true"></span>
+        Systems Operational
+      </div>
+    </header>
+
+    <div class="planner-notice" role="note">
+      <strong>Planning draft only.</strong>
+      Do not treat this as final registration advice. Confirm courses, prerequisites,
+      and seats with academic advising and in SOLAR before you enroll.
+    </div>
+
+    <div class="layout" id="workspace" data-page="dashboard">
+      <aside class="sidebar" id="config-sidebar">
+        <p class="eyebrow">Configuration</p>
+        <h1 class="sidebar-title">Schedule Parameters</h1>
+
+        <form id="intake-form" class="config-form">
+          <div class="field">
+            <span class="field-label">Declared Major(s)</span>
+            <select id="major" name="major" required>
+              <option value="">Select your major...</option>
+            </select>
+            <select id="spec-1" name="spec_1" aria-label="Specialization for primary major">
+              <option value="">Specialization (optional)</option>
+            </select>
+            <select id="major-2" name="major_2" aria-label="Optional second major">
+              <option value="">Second major (optional)</option>
+            </select>
+            <select id="spec-2" name="spec_2" aria-label="Specialization for second major">
+              <option value="">Second specialization (optional)</option>
+            </select>
+            <p class="field-hint">
+              Add a second major if you’re double majoring. Pick a specialization when your
+              bulletin lists tracks.
+            </p>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Minor(s)</span>
+            <select id="minor" name="minor" aria-label="Optional minor">
+              <option value="">Minor (optional)</option>
+            </select>
+            <select id="minor-2" name="minor_2" aria-label="Optional second minor">
+              <option value="">Second minor (optional)</option>
+            </select>
+            <p class="field-hint">
+              Minors are planned with your majors — gateway minor courses are interleaved
+              into the semester plan.
+            </p>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Completed Courses</span>
+            <div class="tag-input" id="course-tag-input">
+              <div class="tag-list" id="course-tags"></div>
+              <input
+                id="course-draft"
+                type="text"
+                placeholder="e.g. CSE 114"
+                autocomplete="off"
+                aria-label="Add a completed course"
+              />
+            </div>
+            <p class="field-hint">Press Enter or comma to add.</p>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Completed SBC Requirements</span>
+            <div class="sbc-grid" id="sbc-grid"></div>
+            <p class="field-hint" id="sbc-hint">0 selected · hover codes for full name.</p>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Target Credits per Semester</span>
+            <div class="slider-wrap">
+              <div class="slider-bubble" id="credit-bubble">15 cr</div>
+              <input
+                id="credits"
+                type="range"
+                min="12"
+                max="21"
+                step="1"
+                value="15"
+              />
+              <div class="slider-scale">
+                <span>12 credits</span>
+                <span class="slider-mid">Standard load</span>
+                <span>21 credits</span>
+              </div>
+            </div>
+          </div>
+
+          <label class="honors-row">
+            <input type="checkbox" id="is-honors" />
+            <span>Honors program — include honors courses</span>
+          </label>
+
+          <div class="sidebar-actions">
+            <button class="btn primary" type="submit" id="generate-btn" disabled>
+              Generate Optimized Schedule
+            </button>
+            <p class="field-hint center" id="generate-hint">Select a major to continue.</p>
+          </div>
+        </form>
+      </aside>
+
+      <main class="workspace">
+        <section class="view" id="view-empty">
+          <div class="empty-state">
+            <div class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 48" width="48" height="48" fill="none">
+                <rect
+                  x="10"
+                  y="8"
+                  width="28"
+                  height="34"
+                  rx="3"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+                <path
+                  d="M18 18h12M18 24h12M18 30h8"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </div>
+            <h2 id="empty-title">Build your semester plan</h2>
+            <p id="empty-copy">
+              Configure your major, completed courses, and SBC requirements on the
+              left, then click Generate Optimized Schedule. Results are a planning
+              draft — not final advising.
+            </p>
+          </div>
+        </section>
+
+        <section class="view is-hidden" id="view-choices">
+          <div class="view-header">
+            <div>
+              <p class="eyebrow">Bulletin choices</p>
+              <h2>Pick from required lists</h2>
+              <p class="lede" id="choices-summary">
+                These menus come straight from your major requirements — choose the
+                courses you want.
+              </p>
+            </div>
+            <button class="btn ghost" type="button" id="reset-choices">Reset</button>
+          </div>
+          <div id="choice-menus" class="choice-menus"></div>
+          <div class="actions sticky-actions">
+            <div class="pick-meta" id="choice-meta">Make your selections</div>
+            <button class="btn primary" type="button" id="to-core">
+              Build core schedule
+            </button>
+          </div>
+        </section>
+
+        <section class="view is-hidden" id="view-core">
+          <div class="view-header">
+            <div>
+              <p class="eyebrow">Core plan</p>
+              <h2>Core progression</h2>
+              <p class="lede" id="core-summary"></p>
+            </div>
+            <button class="btn ghost" type="button" id="reset-core">Reset</button>
+          </div>
+          <div class="course-list" id="core-list"></div>
+          <div class="actions">
+            <button class="btn ghost" type="button" id="back-to-choices">Back</button>
+            <button class="btn primary" type="button" id="to-sbc">
+              Choose SBC electives
+            </button>
+          </div>
+        </section>
+
+        <section class="view is-hidden" id="view-sbc">
+          <div class="view-header">
+            <div>
+              <p class="eyebrow">Step 2 of 2</p>
+              <h2>Pick SBC electives</h2>
+              <p class="lede" id="sbc-summary"></p>
+            </div>
+            <div class="pick-meta" id="pick-meta">0 selected</div>
+          </div>
+          <div class="sbc-options" id="sbc-options"></div>
+          <div class="actions sticky-actions">
+            <button class="btn ghost" type="button" id="back-to-core">Back</button>
+            <button class="btn primary" type="button" id="finalize">
+              Generate schedule
+            </button>
+          </div>
+        </section>
+
+        <section class="view is-hidden" id="view-final">
+          <div class="view-header">
+            <div>
+              <p class="eyebrow">Recommended plan</p>
+              <h2>Your semester schedule</h2>
+              <p class="lede" id="final-summary"></p>
+            </div>
+            <div class="view-actions">
+              <button class="btn primary" type="button" id="save-history">
+                Save to History
+              </button>
+              <button class="btn ghost" type="button" id="start-over">New plan</button>
+            </div>
+          </div>
+          <div class="planner-notice planner-notice-inline" role="note">
+            <strong>Not final advice.</strong>
+            Use this schedule as a planner only. Verify everything with advising and
+            SOLAR before registering.
+          </div>
+          <article class="result" id="final-markdown"></article>
+          <div class="course-list compact" id="final-list"></div>
+        </section>
+
+        <section class="view is-hidden" id="view-history">
+          <div class="view-header">
+            <div>
+              <p class="eyebrow">Saved schedules</p>
+              <h2>History</h2>
+              <p class="lede">
+                Plans you saved after generating a schedule. Open one to make it your
+                active My Plan.
+              </p>
+            </div>
+            <button class="btn ghost is-hidden" type="button" id="clear-history">
+              Clear all
+            </button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <button class="help-fab" type="button" id="chat-fab" title="Ask the counselor" aria-label="Open counselor chat">
+      ✦
+    </button>
+
+    <aside class="chat-drawer is-hidden" id="chat-drawer" aria-label="AI counselor chat">
+      <header class="chat-header">
+        <div>
+          <strong>AI Counselor</strong>
+          <span>Ask about courses, SBCs, or tweak your plan</span>
+        </div>
+        <button type="button" class="chat-close" id="chat-close" aria-label="Close chat">×</button>
+      </header>
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-bubble assistant">
+          Hi — I can explain anything on your plan, suggest swaps, and update this
+          planning draft if you don’t like a course. I’m not a substitute for
+          academic advising; confirm changes in SOLAR before you register.
+        </div>
+      </div>
+      <form class="chat-compose" id="chat-form">
+        <input
+          id="chat-input"
+          type="text"
+          placeholder="e.g. What is AMS 151? Swap GEO 101 for something else"
+          autocomplete="off"
+        />
+        <button class="btn primary" type="submit" id="chat-send">Send</button>
+      </form>
+    </aside>
+
+    <div class="toast is-hidden" id="toast" role="status"></div>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
