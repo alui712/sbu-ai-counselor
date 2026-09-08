@@ -134,11 +134,11 @@ function normalizeCourse(raw) {
 }
 
 function renderMajors(majors) {
-  const options = majors.length ? majors : ["Computer Science, BS"];
-  const preferred =
-    options.find((name) => /^computer science/i.test(name)) || options[0];
+  const options = majors || [];
   const optionHtml = (includeBlank, blankLabel, selectedValue) =>
-    (includeBlank ? `<option value="">${blankLabel}</option>` : "") +
+    (includeBlank
+      ? `<option value="" ${selectedValue ? "" : "selected"}>${blankLabel}</option>`
+      : "") +
     options
       .map((name) => {
         const selected = name === selectedValue ? "selected" : "";
@@ -146,10 +146,13 @@ function renderMajors(majors) {
       })
       .join("");
 
-  $("#major").innerHTML = optionHtml(true, "Select your major...", preferred);
+  const major = $("#major");
+  major.innerHTML = optionHtml(true, "Select your major...", "");
+  major.value = "";
+  major.selectedIndex = 0;
   $("#major-2").innerHTML = optionHtml(true, "Second major (optional)", "");
   syncSecondMajorOptions();
-  loadSpecializations("spec-1", preferred);
+  loadSpecializations("spec-1", "");
   loadSpecializations("spec-2", "");
   updateGenerateEnabled();
 }
@@ -386,6 +389,56 @@ function menuIsUnlocked(menu) {
   return true;
 }
 
+function syncChoiceCheckboxes() {
+  const root = $("#choice-menus");
+  if (!root) return;
+  for (const menu of state.menus) {
+    const selected = state.menuSelections[menu.id] || new Set();
+    root.querySelectorAll(`input[data-menu="${CSS.escape(menu.id)}"]`).forEach((input) => {
+      const on = selected.has(input.value);
+      input.checked = on;
+      input.closest(".sbc-option")?.classList.toggle("is-selected", on);
+    });
+  }
+  refreshChoiceMenuLocks();
+  updateChoiceMeta();
+}
+
+function refreshChoiceBackButtons() {
+  const picks = $("#back-to-picks");
+  if (picks) picks.classList.toggle("is-hidden", !state.menus.length);
+}
+
+function returnToChoicePicks() {
+  if (!state.menus.length) {
+    setPage("dashboard");
+    return;
+  }
+  syncChoiceCheckboxes();
+  goToPlan("choices");
+  document.querySelector(".choice-menu")?.scrollIntoView({ block: "start" });
+}
+
+function undoLastChoicePick() {
+  for (const menu of [...state.menus].reverse()) {
+    const selected = state.menuSelections[menu.id];
+    if (!selected?.size) continue;
+    const last = [...selected].at(-1);
+    selected.delete(last);
+    const input = document.querySelector(
+      `#choice-menus input[data-menu="${CSS.escape(menu.id)}"][value="${CSS.escape(last)}"]`
+    );
+    if (input) {
+      input.checked = false;
+      input.closest(".sbc-option")?.classList.remove("is-selected");
+    }
+    refreshChoiceMenuLocks();
+    updateChoiceMeta();
+    return true;
+  }
+  return false;
+}
+
 function updateChoiceMeta() {
   const total = selectedRequirementCourses().length;
   const pending = state.menus.filter((m) => {
@@ -523,6 +576,7 @@ async function buildCoreFromIntake() {
     `${data.schedule.total_credits} credits locked from major progression` +
     ` · target ${data.intake.target_credits}`;
   renderCourseList($("#core-list"), data.schedule.courses || []);
+  refreshChoiceBackButtons();
   goToPlan("core");
 }
 
@@ -1025,9 +1079,14 @@ async function init() {
     }
   });
 
-  $("#back-to-choices").addEventListener("click", () => {
-    if (state.menus.length) goToPlan("choices");
-    else setPage("dashboard");
+  $("#back-from-choices").addEventListener("click", () => {
+    if (!undoLastChoicePick()) setPage("dashboard");
+  });
+  $("#back-to-choices").addEventListener("click", returnToChoicePicks);
+  $("#back-to-picks").addEventListener("click", returnToChoicePicks);
+  $("#back-from-final").addEventListener("click", () => {
+    if (state.options.length) goToPlan("sbc");
+    else returnToChoicePicks();
   });
   $("#reset-choices").addEventListener("click", resetPlanViews);
 

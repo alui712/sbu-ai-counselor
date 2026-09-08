@@ -54,11 +54,11 @@
         <p class="eyebrow">Configuration</p>
         <h1 class="sidebar-title">Schedule Parameters</h1>
 
-        <form id="intake-form" class="config-form">
+        <form id="intake-form" class="config-form" autocomplete="off">
           <div class="field">
             <span class="field-label">Declared Major(s)</span>
-            <select id="major" name="major" required>
-              <option value="">Select your major...</option>
+            <select id="major" name="declared_major" required autocomplete="off">
+              <option value="" selected>Select your major...</option>
             </select>
             <select id="spec-1" name="spec_1" aria-label="Specialization for primary major">
               <option value="">Specialization (optional)</option>
@@ -190,6 +190,7 @@
           <div id="choice-menus" class="choice-menus"></div>
           <div class="actions sticky-actions">
             <div class="pick-meta" id="choice-meta">Make your selections</div>
+            <button class="btn ghost" type="button" id="back-from-choices">Back</button>
             <button class="btn primary" type="button" id="to-core">
               Build core schedule
             </button>
@@ -207,7 +208,9 @@
           </div>
           <div class="course-list" id="core-list"></div>
           <div class="actions">
-            <button class="btn ghost" type="button" id="back-to-choices">Back</button>
+            <button class="btn ghost" type="button" id="back-to-choices">
+              Back to change picks
+            </button>
             <button class="btn primary" type="button" id="to-sbc">
               Choose SBC electives
             </button>
@@ -232,6 +235,7 @@
           />
           <div class="sbc-options" id="sbc-options"></div>
           <div class="actions sticky-actions">
+            <button class="btn ghost" type="button" id="back-to-picks">Change first picks</button>
             <button class="btn ghost" type="button" id="back-to-core">Back</button>
             <button class="btn primary" type="button" id="finalize">
               Generate schedule
@@ -247,6 +251,7 @@
               <p class="lede" id="final-summary"></p>
             </div>
             <div class="view-actions">
+              <button class="btn ghost" type="button" id="back-from-final">Back</button>
               <button class="btn primary" type="button" id="save-history">
                 Save to History
               </button>
@@ -319,6 +324,6 @@
 
     <div class="toast is-hidden" id="toast" role="status"></div>
 
-    <script src="/static/app.js" type="module"></script>
+    <script src="/static/app.js?v=2" type="module"></script>
   </body>
 </html>

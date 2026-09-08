@@ -65,16 +65,7 @@ def _load_programs_by_type(program_type: str) -> list[str]:
 
 
 def _load_majors() -> list[str]:
-    majors = _load_programs_by_type("major")
-    preferred = next(
-        (m for m in majors if m.lower().startswith("computer science")),
-        "Computer Science",
-    )
-    if preferred in majors:
-        majors = [preferred] + [m for m in majors if m != preferred]
-    elif preferred:
-        majors = [preferred] + majors
-    return majors or ["Computer Science"]
+    return _load_programs_by_type("major")
 
 
 def _load_minors() -> list[str]:
@@ -220,7 +211,7 @@ def meta():
         "majors": _load_majors(),
         "minors": _load_minors(),
         "brand": "SBU AI Academic Counselor",
-        "default_major": "Computer Science",
+        "default_major": "",
         "default_target_credits": 15,
     }
 
