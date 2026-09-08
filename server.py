@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -353,13 +354,20 @@ def chat(body: ChatRequest):
     return result
 
 
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 @app.get("/")
 def index():
     index_path = WEB_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="Web UI not found")
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-store"})
 
 
 if WEB_DIR.exists():
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+    app.mount("/static", NoCacheStaticFiles(directory=WEB_DIR), name="static")

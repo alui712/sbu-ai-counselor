@@ -133,6 +133,27 @@ function normalizeCourse(raw) {
   return m ? `${m[1]} ${m[2]}` : null;
 }
 
+function clearMajorUntilUserPicks(major) {
+  const keepBlank = () => {
+    if (major.dataset.userPicked === "1") return;
+    major.value = "";
+    major.selectedIndex = 0;
+  };
+  major.dataset.userPicked = "0";
+  major.addEventListener(
+    "pointerdown",
+    () => {
+      major.dataset.userPicked = "1";
+    },
+    { once: true }
+  );
+  keepBlank();
+  // Browsers restore the last chosen major after our script runs.
+  setTimeout(keepBlank, 0);
+  setTimeout(keepBlank, 300);
+  setTimeout(keepBlank, 1000);
+}
+
 function renderMajors(majors) {
   const options = majors || [];
   const optionHtml = (includeBlank, blankLabel, selectedValue) =>
@@ -148,8 +169,7 @@ function renderMajors(majors) {
 
   const major = $("#major");
   major.innerHTML = optionHtml(true, "Select your major...", "");
-  major.value = "";
-  major.selectedIndex = 0;
+  clearMajorUntilUserPicks(major);
   $("#major-2").innerHTML = optionHtml(true, "Second major (optional)", "");
   syncSecondMajorOptions();
   loadSpecializations("spec-1", "");
