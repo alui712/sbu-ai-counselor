@@ -702,6 +702,14 @@ select:focus,
   color: var(--muted);
 }
 
+.sbc-search {
+  width: 100%;
+  margin: 0 0 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+}
+
 .sbc-options {
   display: grid;
   gap: 1.25rem;

@@ -604,10 +604,30 @@ function renderSbcOptions(options) {
       const code = input.value;
       if (input.checked) state.selectedSbcs.add(code);
       else state.selectedSbcs.delete(code);
-      input.closest(".sbc-option").classList.toggle("is-selected", input.checked);
+      root.querySelectorAll(`input[value="${CSS.escape(code)}"]`).forEach((other) => {
+        other.checked = input.checked;
+        other.closest(".sbc-option")?.classList.toggle("is-selected", input.checked);
+      });
       updatePickMeta();
     });
   });
+  const search = $("#sbc-search");
+  if (search) {
+    search.value = "";
+    search.oninput = () => {
+      const q = search.value.trim().toLowerCase();
+      root.querySelectorAll(".sbc-option").forEach((card) => {
+        const text = card.textContent.toLowerCase();
+        card.classList.toggle("is-hidden", Boolean(q) && !text.includes(q));
+      });
+      root.querySelectorAll(".sbc-group").forEach((group) => {
+        const visible = [...group.querySelectorAll(".sbc-option")].some(
+          (card) => !card.classList.contains("is-hidden")
+        );
+        group.classList.toggle("is-hidden", !visible);
+      });
+    };
+  }
   updatePickMeta();
 }
 
@@ -1019,8 +1039,8 @@ async function init() {
         ...state.intake,
         completed_courses: state.intake.completed_courses,
         already_selected: [],
-        max_credits: 4,
-        per_tag_limit: 6,
+        max_credits: 6,
+        per_tag_limit: 0,
       });
       state.options = data.options || [];
       $("#sbc-summary").textContent =

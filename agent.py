@@ -309,13 +309,13 @@ def build_requirement_choice_menus(
         text = extracted.get("requirements_text") or ""
         program = extracted.get("program_name") or major_name
 
-        # Calculus sequences: pick a track (first course), not AMS 151 XOR AMS 161.
+        # Calculus sequences: pick one pair (AMS 151+161 OR MAT 131+132, not both).
+        # If the student already started or finished any track, do not offer the others.
         calc_tracks = extract_calc_track_menu(text)
-        if calc_tracks:
+        already_on_calc = any(completed & set(track) for track in CALC_TRACK_SETS)
+        if calc_tracks and not already_on_calc:
             unfinished = []
             for track in calc_tracks:
-                if completed & set(track):
-                    continue
                 first = next((c for c in track if c not in completed), None)
                 if not first:
                     continue
@@ -337,8 +337,8 @@ def build_requirement_choice_menus(
                         "major": program,
                         "title": f"{program} — choose a calculus sequence",
                         "description": (
-                            "Pick one full calculus track. You will take the courses "
-                            "in order across semesters (not just one course)."
+                            "Pick one calculus pair. You do not take AMS and MAT "
+                            "calculus — finish the pair you start, in order."
                         ),
                         "need": 1,
                         "options": unfinished,
@@ -913,8 +913,8 @@ def build_sbc_options_menu(
     completed_courses: list[str],
     completed_sbcs: list[str],
     already_selected: list[str] | None = None,
-    max_credits: int = 4,
-    per_tag_limit: int = 6,
+    max_credits: int = 6,
+    per_tag_limit: int = 0,
     is_honors: bool = False,
 ) -> list[dict]:
     """Build a browsable list of eligible SBC electives for student choice.
@@ -922,8 +922,8 @@ def build_sbc_options_menu(
     Each option includes course name, SBC tags, credits, and a short description.
     Honors courses are hidden unless is_honors=True.
 
-    Picks are diversified by department so the menu is not dominated by
-    alphabetically-early codes (AAS, ARH, …).
+    per_tag_limit=0 returns the full eligible list for each open SBC gap so the
+    student can pick any elective, not a short sample.
     """
     completed = {_normalize_code(c) for c in completed_courses}
     completed |= {_normalize_code(c) for c in (already_selected or [])}
@@ -985,9 +985,34 @@ def build_sbc_options_menu(
             max_credits=max_credits,
         )
         tagged = [{**rec, "primary_sbc": tag} for rec in recs]
-        # Skip courses already offered under an earlier SBC gap.
-        tagged = [r for r in tagged if r["course_code"] not in global_seen]
-        chosen = diversify(tagged, per_tag_limit)
+        # Full list by default. A positive limit keeps the old short sample.
+        if per_tag_limit and per_tag_limit > 0:
+            tagged = [r for r in tagged if r["course_code"] not in global_seen]
+            chosen = diversify(tagged, per_tag_limit)
+        else:
+            chosen = []
+            seen_here: set[str] = set()
+            for rec in tagged:
+                code = rec["course_code"]
+                if code in seen_here or code in completed:
+                    continue
+                if not is_honors and _is_honors_course(code):
+                    continue
+                desc = rec.get("description") or ""
+                if not desc:
+                    desc = (COURSES.get(code) or {}).get("description", "")
+                chosen.append(
+                    {
+                        "course_code": code,
+                        "full_title": rec["full_title"],
+                        "credits": rec["credits"],
+                        "sbcs": rec["sbcs"],
+                        "primary_sbc": tag,
+                        "description": re.sub(r"\s+", " ", desc).strip(),
+                    }
+                )
+                seen_here.add(code)
+            chosen.sort(key=lambda row: row["course_code"])
         for opt in chosen:
             opt["primary_sbc"] = tag
             global_seen.add(opt["course_code"])
