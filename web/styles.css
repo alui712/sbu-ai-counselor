@@ -819,17 +819,24 @@ select:focus,
   position: fixed;
   right: 1.25rem;
   bottom: 1.25rem;
-  width: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   height: 48px;
-  border-radius: 50%;
+  padding: 0 1rem 0 0.85rem;
+  border-radius: 999px;
   border: 0;
   background: var(--red);
   color: white;
-  font-size: 1.15rem;
-  font-weight: 700;
+  font-size: 0.92rem;
+  font-weight: 600;
   cursor: pointer;
   z-index: 40;
   box-shadow: 0 8px 20px rgba(200, 16, 46, 0.28);
+}
+
+.help-fab svg {
+  flex: 0 0 auto;
 }
 
 .help-fab:hover {
@@ -839,7 +846,7 @@ select:focus,
 .chat-drawer {
   position: fixed;
   right: 1rem;
-  bottom: 5rem;
+  bottom: 5.5rem;
   width: min(400px, calc(100vw - 1.5rem));
   height: min(560px, calc(100vh - 7rem));
   background: white;
