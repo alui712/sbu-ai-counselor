@@ -44,6 +44,8 @@ SBC_LABELS = {
     "SNW": "Study the Natural World",
     "USA": "Understand the Political, Economic, Social, and Cultural History of the United States",
     "DIV": "Respect Diversity and Foster Inclusiveness",
+    "SPK": "Speak Effectively before an Audience",
+    "WRTD": "Write Effectively within One's Discipline",
 }
 
 
@@ -128,6 +130,7 @@ class SbcOptionsRequest(IntakeRequest):
     already_selected: list[str] = Field(default_factory=list)
     max_credits: int = 4
     per_tag_limit: int = 6
+    include_optional: bool = False
 
 
 class FinalizeRequest(IntakeRequest):
@@ -285,12 +288,24 @@ def sbc_options(body: SbcOptionsRequest):
         max_credits=body.max_credits,
         per_tag_limit=body.per_tag_limit,
         is_honors=intake["is_honors"],
+        include_optional=body.include_optional,
     )
     return {
         "intake": intake,
         "core_credits": core["total_credits"],
         "remaining_credits": max(intake["target_credits"] - core["total_credits"], 0),
         "sbc_gaps": core.get("sbc_gaps") or intake["sbc_gaps"],
+        "sbc_complete": bool(core.get("sbc_complete")),
+        "degree_note": core.get("degree_note") or "",
+        "required_courses": [
+            {
+                "course_code": c.get("course_code"),
+                "title": c.get("title"),
+                "credits": c.get("credits"),
+            }
+            for c in (core.get("courses") or [])
+            if str(c.get("role") or "").startswith(("core", "minor"))
+        ],
         "options": options,
     }
 

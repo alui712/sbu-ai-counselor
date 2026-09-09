@@ -592,9 +592,19 @@ async function buildCoreFromIntake() {
   state.intake = data.intake;
   state.core = data.schedule;
   state.selectedSbcs = new Set();
-  $("#core-summary").textContent =
-    `${data.schedule.total_credits} credits locked from major progression` +
-    ` · target ${data.intake.target_credits}`;
+  const gaps = data.schedule.sbc_gaps || [];
+  const note = data.schedule.degree_note || "";
+  $("#core-summary").textContent = note
+    ? note
+    : `${data.schedule.total_credits} credits locked from major progression` +
+      ` · target ${data.intake.target_credits}` +
+      (gaps.length ? ` · ${gaps.length} SBC gaps left` : "");
+  const toSbc = $("#to-sbc");
+  if (toSbc) {
+    toSbc.textContent = gaps.length
+      ? "Choose SBC electives"
+      : "Review remaining classes";
+  }
   renderCourseList($("#core-list"), data.schedule.courses || []);
   refreshChoiceBackButtons();
   goToPlan("core");
@@ -1110,24 +1120,76 @@ async function init() {
   });
   $("#reset-choices").addEventListener("click", resetPlanViews);
 
+  async function loadSbcStep(includeOptional = false) {
+    const data = await postJSON("/api/sbc-options", {
+      ...state.intake,
+      completed_courses: state.intake.completed_courses,
+      already_selected: [],
+      max_credits: 6,
+      per_tag_limit: 0,
+      include_optional: includeOptional,
+    });
+    state.options = data.options || [];
+    const gaps = data.sbc_gaps || [];
+    const complete = Boolean(data.sbc_complete) || !gaps.length;
+    const note = $("#sbc-complete-note");
+    const extras = $("#sbc-extra-actions");
+    const search = $("#sbc-search");
+    if (complete && !includeOptional) {
+      $("#sbc-summary").textContent =
+        "All selected SBC requirements are already done. Extra SBC classes were not added.";
+      if (note) {
+        note.textContent =
+          data.degree_note ||
+          "You do not need random SBC classes to finish. Use the required classes only, or add one if you still want to.";
+        note.classList.remove("is-hidden");
+      }
+      extras?.classList.remove("is-hidden");
+      search?.classList.add("is-hidden");
+      $("#sbc-options").innerHTML = "";
+      const heading = document.querySelector("#view-sbc h2");
+      if (heading) heading.textContent = "SBC requirements already done";
+    } else {
+      if (note) note.classList.add("is-hidden");
+      extras?.classList.add("is-hidden");
+      search?.classList.remove("is-hidden");
+      const heading = document.querySelector("#view-sbc h2");
+      if (heading) {
+        heading.textContent = includeOptional
+          ? "Optional extra class"
+          : "Pick SBC electives";
+      }
+      $("#sbc-summary").textContent = includeOptional
+        ? "These are optional. Pick only if you still want another class — they are not required."
+        : `Core load is ${data.core_credits} credits. ` +
+          `You still need about ${data.remaining_credits} credits. ` +
+          `Open gaps: ${gaps.join(", ") || "none"}.`;
+      renderSbcOptions(state.options);
+    }
+    goToPlan("sbc");
+  }
+
   $("#to-sbc").addEventListener("click", async () => {
     const btn = $("#to-sbc");
     btn.disabled = true;
     try {
-      const data = await postJSON("/api/sbc-options", {
-        ...state.intake,
-        completed_courses: state.intake.completed_courses,
-        already_selected: [],
-        max_credits: 6,
-        per_tag_limit: 0,
-      });
-      state.options = data.options || [];
-      $("#sbc-summary").textContent =
-        `Core load is ${data.core_credits} credits. ` +
-        `You still need about ${data.remaining_credits} credits. ` +
-        `Open gaps: ${(data.sbc_gaps || []).join(", ") || "none"}.`;
-      renderSbcOptions(state.options);
-      goToPlan("sbc");
+      await loadSbcStep(false);
+    } catch (err) {
+      showToast(err.message || String(err), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#skip-extra-classes")?.addEventListener("click", () => {
+    state.selectedSbcs = new Set();
+    $("#finalize").click();
+  });
+  $("#add-optional-class")?.addEventListener("click", async () => {
+    const btn = $("#add-optional-class");
+    btn.disabled = true;
+    try {
+      await loadSbcStep(true);
     } catch (err) {
       showToast(err.message || String(err), true);
     } finally {
@@ -1147,8 +1209,9 @@ async function init() {
       });
       state.final = data;
       $("#final-summary").textContent =
+        data.schedule.degree_note ||
         `${data.schedule.total_credits} credits · ${data.schedule.major}` +
-        ` · gaps left: ${(data.schedule.sbc_gaps || []).slice(0, 6).join(", ") || "none"}`;
+          ` · gaps left: ${(data.schedule.sbc_gaps || []).slice(0, 6).join(", ") || "none"}`;
       $("#final-markdown").innerHTML = simpleMarkdown(data.markdown || "");
       renderCourseList($("#final-list"), data.schedule.courses || []);
       goToPlan("final");

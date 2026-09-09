@@ -20,6 +20,8 @@ from tools.prereq_engine import (
     extract_program_course_mentions,
     extract_tiered_choice_blocks,
     extract_one_of_requirement_groups,
+    extract_specialization_courses,
+    _codes_skipped_by_completed_one_of,
     extract_calc_track_menu,
     _tiered_blocked_codes,
     _progress_prereqs_satisfied,
@@ -54,6 +56,8 @@ KNOWN_SBC_TAGS = [
     "SNW",
     "USA",
     "DIV",
+    "SPK",
+    "WRTD",
 ]
 
 CREDIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*credits?", re.IGNORECASE)
@@ -441,6 +445,54 @@ def build_requirement_choice_menus(
     return menus
 
 
+ELECTIVE_SBC_TAGS = [
+    "ARTS",
+    "HUM",
+    "SBS",
+    "TECH",
+    "GLO",
+    "SNW",
+    "USA",
+    "DIV",
+    "ESI",
+    "CER",
+    "STAS",
+    "SPK",
+    "WRTD",
+]
+
+
+def _remaining_required_courses(
+    program_list: list[str],
+    completed: set[str],
+    spec_list: list[str] | None = None,
+) -> list[str]:
+    """Bulletin courses still listed as requirements and not already satisfied."""
+    remaining: list[str] = []
+    seen: set[str] = set()
+    specs = spec_list or []
+    for index, program_name in enumerate(program_list):
+        extracted = extract_program_course_mentions(program_name)
+        if not extracted:
+            continue
+        required = list(extracted.get("courses") or [])
+        skip = _codes_skipped_by_completed_one_of(
+            extract_one_of_requirement_groups(extracted.get("requirements_text") or ""),
+            completed,
+        )
+        spec_name = specs[index] if index < len(specs) else ""
+        if spec_name:
+            for code in extract_specialization_courses(program_name, spec_name):
+                if code not in required:
+                    required.append(code)
+        for code in required:
+            if code in seen or code in completed or code in skip:
+                continue
+            seen.add(code)
+            remaining.append(code)
+    return remaining
+
+
 def build_schedule_deterministically(
     completed_courses: list[str],
     major: str | None = None,
@@ -770,12 +822,12 @@ def build_schedule_deterministically(
         if try_add(code, role, soft_placement=True):
             done_sbcs.update(tags)
 
-    # 4) Fill toward the credit target so a draft is a full semester, not 1–2 classes.
-    # Extra major courses only if they are core (not late science-menu fillers).
-    # Remaining credits are suggested SBC electives the student can swap.
+    # 4) Add more required major/minor courses if they fit. Never invent SBC
+    # classes just to hit the credit slider once those requirements are done.
+    open_sbc_gaps = [tag for tag in KNOWN_SBC_TAGS if tag not in done_sbcs]
     if total_credits < target:
         for cand in roadmap:
-            if total_credits >= max(target - 6, 9):
+            if total_credits >= target:
                 break
             code = cand["course_code"]
             if code in choice_menu_codes and code not in {
@@ -797,90 +849,49 @@ def build_schedule_deterministically(
             )
             try_add(code, role)
 
-    preferred_by_sbc = {
-        "ARTS": "ARH 201",
-        "HUM": "PHI 108",
-        "SBS": "ECO 108",
-        "GLO": "HIS 104",
-        "USA": "HIS 103",
-        "SNW": "GEO 102",
-    }
-    for sbc_tag, code in preferred_by_sbc.items():
-        if total_credits >= target:
-            break
-        if sbc_tag in done_sbcs:
-            continue
-        if try_add(code, f"sbc:{sbc_tag}", soft_placement=True):
-            done_sbcs.add(sbc_tag)
-
-    sbc_fill_order = [
-        tag
-        for tag in [
-            "ARTS",
-            "HUM",
-            "SBS",
-            "TECH",
-            "GLO",
-            "SNW",
-            "USA",
-            "DIV",
-            "ESI",
-            "CER",
-            "STAS",
-        ]
-        if tag not in done_sbcs
-    ]
-    taken_or_done = completed | selected_codes
-    stalled = 0
-    while total_credits < target and stalled < 8:
-        remaining = target - total_credits
-        room = 17 - total_credits
-        if room <= 0 or remaining <= 0:
-            break
-        picked = None
-        for sbc_tag in sbc_fill_order or ["ARTS", "HUM", "SBS"]:
-            recs = find_sbc_recommendations(
-                completed_courses=sorted(taken_or_done),
-                target_sbc=sbc_tag,
-                max_credits=min(4, room),
-            )
-            pool = [r for r in recs if r["credits"] <= room]
-            # Prefer a course that fits the leftover credits when close to target.
-            pool.sort(key=lambda r: (0 if r["credits"] <= remaining else 1, r["credits"], r["course_code"]))
-            for rec in pool:
-                if rec["course_code"] in taken_or_done:
-                    continue
-                if try_add(rec["course_code"], f"sbc:{sbc_tag}", soft_placement=True):
-                    picked = rec
-                    taken_or_done = completed | selected_codes
-                    done_sbcs.add(sbc_tag)
-                    if sbc_tag in sbc_fill_order:
-                        sbc_fill_order.remove(sbc_tag)
-                    break
-            if picked:
+    # Only fill leftover credits with an SBC course when that tag is still open.
+    if auto_fill_sbcs and open_sbc_gaps and total_credits < target:
+        preferred_by_sbc = {
+            "ARTS": "ARH 201",
+            "HUM": "PHI 108",
+            "SBS": "ECO 108",
+            "GLO": "HIS 104",
+            "USA": "HIS 103",
+            "SNW": "GEO 102",
+        }
+        for sbc_tag, code in preferred_by_sbc.items():
+            if total_credits >= target or sbc_tag not in open_sbc_gaps:
                 break
-        if not picked:
-            stalled += 1
-            # Allow a second course for an already-covered tag if still short.
-            for sbc_tag in ["ARTS", "HUM", "SBS", "GLO", "USA"]:
-                recs = find_sbc_recommendations(
-                    completed_courses=sorted(taken_or_done),
-                    target_sbc=sbc_tag,
-                    max_credits=min(4, room),
-                )
-                for rec in recs:
-                    if rec["course_code"] in taken_or_done:
-                        continue
-                    if try_add(rec["course_code"], f"sbc:{sbc_tag}", soft_placement=True):
-                        picked = rec
-                        taken_or_done = completed | selected_codes
-                        done_sbcs.add(sbc_tag)
-                        break
-                if picked:
-                    break
-        if not picked:
-            break
-        stalled = 0
+            if try_add(code, f"sbc:{sbc_tag}", soft_placement=True):
+                done_sbcs.add(sbc_tag)
+                open_sbc_gaps = [tag for tag in open_sbc_gaps if tag != sbc_tag]
+
+    required_left = _remaining_required_courses(
+        program_list, completed | selected_codes, spec_list
+    )
+    required_now = [c for c in selected if is_progress_course(c)]
+    sbc_complete = not [tag for tag in KNOWN_SBC_TAGS if tag not in done_sbcs]
+    degree_note = ""
+    if sbc_complete and required_now and total_credits < target:
+        names = ", ".join(c["course_code"] for c in required_now)
+        count = len(required_now)
+        label = "class" if count == 1 else "classes"
+        degree_note = (
+            f"You only need these {count} {label} left to finish the remaining "
+            f"requirements this planner can see: {names}. "
+            f"Your credit filter is {target}, but you do not need extra SBC classes "
+            "once those requirements are done. You can stop here, or add a class only if you want one."
+        )
+    elif sbc_complete and not required_left and not required_now:
+        degree_note = (
+            "The requirements this planner can see are already finished. "
+            "No extra SBC classes were added."
+        )
+    elif not open_sbc_gaps and total_credits < target:
+        degree_note = (
+            f"All selected SBC requirements are already done, so no extra SBC classes "
+            f"were added to fill the {target}-credit filter."
+        )
 
     sbc_gaps = [tag for tag in KNOWN_SBC_TAGS if tag not in done_sbcs]
     return {
@@ -891,6 +902,9 @@ def build_schedule_deterministically(
         "base_completed_sbcs": sorted(base_completed_sbcs),
         "completed_sbcs": sorted(done_sbcs),
         "sbc_gaps": sbc_gaps,
+        "sbc_complete": sbc_complete,
+        "degree_note": degree_note,
+        "remaining_required": required_left[:12],
         "courses": selected,
         "total_credits": total_credits,
         "target_credits": target,
@@ -916,6 +930,7 @@ def build_sbc_options_menu(
     max_credits: int = 6,
     per_tag_limit: int = 0,
     is_honors: bool = False,
+    include_optional: bool = False,
 ) -> list[dict]:
     """Build a browsable list of eligible SBC electives for student choice.
 
@@ -928,11 +943,12 @@ def build_sbc_options_menu(
     completed = {_normalize_code(c) for c in completed_courses}
     completed |= {_normalize_code(c) for c in (already_selected or [])}
     done_sbcs = {t.strip().upper() for t in completed_sbcs if t}
-    gap_tags = [
-        tag
-        for tag in ["ARTS", "HUM", "SBS", "TECH", "GLO", "SNW", "USA", "DIV", "ESI", "CER"]
-        if tag not in done_sbcs
-    ]
+    gap_tags = [tag for tag in ELECTIVE_SBC_TAGS if tag not in done_sbcs]
+    if not gap_tags and not include_optional:
+        return []
+    if not gap_tags and include_optional:
+        # Student asked to add a class even though every SBC is already done.
+        gap_tags = ["ARTS", "HUM", "SBS", "TECH", "GLO", "USA"]
 
     def diversify(recs: list[dict], limit: int) -> list[dict]:
         """Prefer one course per department, then fill remaining slots."""
@@ -1015,6 +1031,7 @@ def build_sbc_options_menu(
             chosen.sort(key=lambda row: row["course_code"])
         for opt in chosen:
             opt["primary_sbc"] = tag
+            opt["optional"] = include_optional and tag in done_sbcs
             global_seen.add(opt["course_code"])
             options.append(opt)
     return options
@@ -1129,11 +1146,19 @@ def format_schedule_markdown(schedule: dict, intake: dict | None = None) -> str:
         )
     gaps = schedule.get("sbc_gaps") or []
     done = schedule.get("completed_sbcs") or []
+    note = schedule.get("degree_note") or ""
     lines.extend(
         [
             "",
             "**Completed SBCs:** " + (", ".join(done) if done else "None listed"),
             "**Open SBC gaps:** " + (", ".join(gaps) if gaps else "None"),
+            "",
+        ]
+    )
+    if note:
+        lines.extend([f"**Remaining requirements:** {note}", ""])
+    lines.extend(
+        [
             "",
             "_This is a planning draft only — not final advising. "
             "Confirm prerequisites, requirements, and seating with academic advising "
@@ -1172,6 +1197,9 @@ def format_schedule_with_llm(schedule: dict, intake: dict) -> str:
             "Mention the major(s) and minor(s) when listed, "
             "why core courses were prioritized (prerequisites / major progression), "
             "completed SBCs, remaining SBC gaps, and total credits. "
+            "If a degree note is provided, include it: do not pretend extra SBC "
+            "classes are required just to reach the credit filter. "
+            "Never say a course satisfies an SBC the student already completed. "
             "End with a one-line reminder that this is a planning draft only and "
             "the student must confirm with advising and SOLAR before registering."
         )
@@ -1190,6 +1218,7 @@ def format_schedule_with_llm(schedule: dict, intake: dict) -> str:
             f"Completed courses: {', '.join(schedule['completed_courses']) or 'None'}\n"
             f"Completed SBCs: {', '.join(schedule.get('completed_sbcs') or []) or 'None'}\n"
             f"SBC gaps still open: {', '.join(schedule.get('sbc_gaps') or []) or 'None'}\n"
+            f"Degree note: {schedule.get('degree_note') or 'None'}\n"
             f"Target credits: {schedule.get('target_credits', 15)}\n"
             f"Total credits (precomputed): {schedule['total_credits']}\n\n"
             f"Pre-selected courses (use exactly these):\n{courses_block}\n\n"
