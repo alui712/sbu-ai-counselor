@@ -463,6 +463,8 @@ def extract_program_course_mentions(program_name: str) -> dict | None:
         return None
 
     text = match.get("requirements_text") or ""
+    notes_at = re.search(r"(?m)^Notes?:\s*$", text)
+    notes_start = notes_at.start() if notes_at else len(text)
     ordered: list[str] = []
     positions: dict[str, int] = {}
     for match_obj in COURSE_MENTION_RE.finditer(text):
@@ -470,6 +472,9 @@ def extract_program_course_mentions(program_name: str) -> dict | None:
         if code not in COURSES or code in positions:
             continue
         start, end = match_obj.start(), match_obj.end()
+        # Footnote-only mentions (e.g. CHE 301 prereq math options) are not cores.
+        if start >= notes_start:
+            continue
         window = text[max(0, start - 140) : min(len(text), end + 90)]
         if EXCLUSION_CONTEXT_RE.search(window):
             continue
@@ -483,6 +488,238 @@ def extract_program_course_mentions(program_name: str) -> dict | None:
         "positions": positions,
         "requirements_text": text,
     }
+
+
+def extract_elective_menu_codes(requirements_text: str) -> set[str]:
+    """Courses listed only as advisor electives / pick-from lists, not hard cores."""
+    text = requirements_text or ""
+    match = re.search(
+        r"(?is)("
+        r"chosen after consultation|"
+        r"elective credits?[^\n]{0,120}following|"
+        r"upper-?division electives?"
+        r")",
+        text,
+    )
+    if not match:
+        return set()
+    blob = text[match.start() :]
+    # Stop before Notes / sample plans so core courses mentioned later aren't marked elective.
+    cut = re.search(r"(?m)^(Notes?:|Sample Course|Honors Program|BCB\b)", blob)
+    if cut and cut.start() > 40:
+        blob = blob[: cut.start()]
+    return set(_extract_codes_from_blob(blob))
+
+
+def extract_or_alternative_groups(requirements_text: str) -> list[set[str]]:
+    """Parse bulletin lines linked by a standalone OR into either/or menus.
+
+    Handles patterns like:
+      BIO 205 - ...
+      OR
+      BIO 207 - ...
+    and longer chains (BIO 320 OR BIO 321 OR EBH 302), including intervening
+    '3 credits' / note lines between a course and its OR.
+    """
+    lines = (requirements_text or "").splitlines()
+    parsed: list[tuple[str, list[str]]] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            parsed.append(("skip", []))
+            continue
+        if re.fullmatch(r"OR", stripped, re.I):
+            parsed.append(("or", []))
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?\s*credits?", stripped, re.I):
+            parsed.append(("skip", []))
+            continue
+        if re.match(r"(?i)^(see note|note:|\()", stripped):
+            parsed.append(("skip", []))
+            continue
+        codes: list[str] = []
+        for match_obj in COURSE_MENTION_RE.finditer(stripped):
+            code = _normalize_code(f"{match_obj.group(1)} {match_obj.group(2)}")
+            if code in COURSES and code not in codes:
+                codes.append(code)
+        if codes and (
+            re.search(r"[A-Z]{3}\s*\d{3}\s*[-–:]", stripped)
+            or (len(codes) == 1 and len(stripped) < 80)
+        ):
+            parsed.append(("codes", codes))
+        else:
+            parsed.append(("other", codes))
+
+    def next_meaningful(start: int) -> int:
+        k = start
+        while k < len(parsed) and parsed[k][0] == "skip":
+            k += 1
+        return k
+
+    groups: list[set[str]] = []
+    i = 0
+    while i < len(parsed):
+        kind, codes = parsed[i]
+        if kind != "codes" or len(codes) != 1:
+            i += 1
+            continue
+        chain = [codes[0]]
+        j = next_meaningful(i + 1)
+        while j < len(parsed):
+            if parsed[j][0] != "or":
+                break
+            nxt = next_meaningful(j + 1)
+            if nxt >= len(parsed):
+                break
+            nxt_kind, nxt_codes = parsed[nxt]
+            if nxt_kind != "codes" or len(nxt_codes) != 1:
+                break
+            chain.append(nxt_codes[0])
+            j = next_meaningful(nxt + 1)
+        if len(chain) >= 2:
+            group = set(chain)
+            if not _is_calc_sequence_group(group) and not any(
+                _calc_track_index(code) is not None for code in group
+            ):
+                if not any(
+                    _one_is_direct_prereq_of_other(a, b)
+                    for a in group
+                    for b in group
+                    if a != b
+                ):
+                    groups.append(group)
+            i = j if j > i else i + 1
+            continue
+        i += 1
+    return groups
+
+
+def _one_is_direct_prereq_of_other(a: str, b: str) -> bool:
+    """True when one course appears in the other's parsed prerequisite clauses."""
+    for src, dst in ((a, b), (b, a)):
+        clauses = PREREQ_CLAUSES.get(dst) or []
+        flat = {course for group in clauses for course in group}
+        if src in flat:
+            return True
+    return False
+
+
+def extract_catalog_equivalence_groups() -> list[set[str]]:
+    """Build either/or pairs from 'Not for credit in addition to' catalog notes."""
+    groups: list[set[str]] = []
+    seen: set[frozenset[str]] = set()
+    pattern = re.compile(
+        r"not for credit in addition to\s+([A-Z]{3})\s*(\d{3})",
+        re.IGNORECASE,
+    )
+    for code, info in COURSES.items():
+        blob = " ".join(
+            [
+                str(info.get("description") or ""),
+                str(info.get("full_title") or ""),
+                str(info.get("prerequisites") or ""),
+            ]
+        )
+        for match in pattern.finditer(blob):
+            other = _normalize_code(f"{match.group(1)} {match.group(2)}")
+            if other not in COURSES or other == code:
+                continue
+            group = frozenset({code, other})
+            if group in seen:
+                continue
+            seen.add(group)
+            groups.append(set(group))
+    return groups
+
+
+_CATALOG_EQUIVALENCE_GROUPS: list[set[str]] | None = None
+
+
+def catalog_equivalence_groups() -> list[set[str]]:
+    global _CATALOG_EQUIVALENCE_GROUPS
+    if _CATALOG_EQUIVALENCE_GROUPS is None:
+        _CATALOG_EQUIVALENCE_GROUPS = extract_catalog_equivalence_groups()
+    return _CATALOG_EQUIVALENCE_GROUPS
+
+
+def extract_requirement_alternative_groups(requirements_text: str) -> list[set[str]]:
+    """All either/or menus for a program: numbered one-of lists + OR lines + catalog pairs."""
+    groups = extract_one_of_requirement_groups(requirements_text)
+    groups.extend(extract_or_alternative_groups(requirements_text))
+    # Catalog equivalences that touch this program's mentioned courses.
+    mentioned = {
+        _normalize_code(f"{a} {b}")
+        for a, b in COURSE_MENTION_RE.findall(requirements_text or "")
+    }
+    for group in catalog_equivalence_groups():
+        if group & mentioned:
+            groups.append(set(group))
+    # Deduplicate identical sets.
+    unique: list[set[str]] = []
+    seen: set[frozenset[str]] = set()
+    for group in groups:
+        key = frozenset(group)
+        if len(key) < 2 or key in seen:
+            continue
+        # Calculus alternatives are owned by CALC_TRACK logic.
+        if any(_calc_track_index(code) is not None for code in key):
+            continue
+        if _is_calc_sequence_group(set(key)):
+            continue
+        seen.add(key)
+        unique.append(set(key))
+    return unique
+
+
+def is_student_choice_equivalent_group(group: set[str]) -> bool:
+    """True for clean either/or menus students should pick from (not noisy track fragments)."""
+    if len(group) < 2 or len(group) > 4:
+        return False
+    if any(_calc_track_index(code) is not None for code in group):
+        return False
+    if _is_calc_sequence_group(group):
+        return False
+    depts = {code.split()[0] for code in group if " " in code}
+    # Physics sequences are multi-course tracks; pairwise OR fragments spam the UI.
+    if depts == {"PHY"}:
+        return False
+    if len(depts) == 1:
+        try:
+            nums = [int(code.split()[1]) for code in group]
+        except (IndexError, ValueError):
+            return False
+        return max(nums) - min(nums) <= 100
+    # Cross-department genetics-style alternatives (BIO 320 / BIO 321 / EBH 302).
+    if depts <= {"BIO", "EBH"}:
+        return True
+    return False
+
+
+def iter_equivalent_choice_groups(requirements_text: str) -> list[set[str]]:
+    """Either/or equivalent course menus suitable for student pickers."""
+    groups: list[set[str]] = []
+    seen: set[frozenset[str]] = set()
+    for group in extract_or_alternative_groups(requirements_text):
+        key = frozenset(group)
+        if key in seen or not is_student_choice_equivalent_group(group):
+            continue
+        seen.add(key)
+        groups.append(set(group))
+    mentioned = {
+        _normalize_code(f"{a} {b}")
+        for a, b in COURSE_MENTION_RE.findall(requirements_text or "")
+    }
+    for group in catalog_equivalence_groups():
+        if not (group & mentioned):
+            continue
+        if not is_student_choice_equivalent_group(group):
+            continue
+        key = frozenset(group)
+        if key in seen:
+            continue
+        seen.add(key)
+        groups.append(set(group))
+    return groups
 
 
 def extract_one_of_requirement_groups(requirements_text: str) -> list[set[str]]:
@@ -825,8 +1062,11 @@ def rank_major_progress_courses(
         required = list(extracted["courses"])
         positions = dict(extracted["positions"])
         one_of_skip = _codes_skipped_by_completed_one_of(
-            extract_one_of_requirement_groups(extracted.get("requirements_text") or ""),
+            extract_requirement_alternative_groups(extracted.get("requirements_text") or ""),
             completed,
+        )
+        elective_menu = extract_elective_menu_codes(
+            extracted.get("requirements_text") or ""
         )
         tiered_blocks = extract_tiered_choice_blocks(
             extracted.get("requirements_text") or ""
@@ -885,6 +1125,8 @@ def rank_major_progress_courses(
             if code in completed or code in seen_codes:
                 continue
             if code in one_of_skip or code in tiered_skip:
+                continue
+            if code in elective_menu:
                 continue
             track_idx = _calc_track_index(code)
             if (

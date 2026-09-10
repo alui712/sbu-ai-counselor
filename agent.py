@@ -20,6 +20,9 @@ from tools.prereq_engine import (
     extract_program_course_mentions,
     extract_tiered_choice_blocks,
     extract_one_of_requirement_groups,
+    extract_requirement_alternative_groups,
+    extract_elective_menu_codes,
+    iter_equivalent_choice_groups,
     extract_specialization_courses,
     _codes_skipped_by_completed_one_of,
     extract_calc_track_menu,
@@ -418,6 +421,8 @@ def build_requirement_choice_menus(
                     )
                     menu_id += 1
 
+        seen_choice_groups: set[frozenset[str]] = set()
+
         for group in extract_one_of_requirement_groups(text):
             # Skip calc-sequence sets (handled as tracks, not flat one-of pickers).
             if _is_calc_sequence_group(group):
@@ -426,9 +431,13 @@ def build_requirement_choice_menus(
                 continue
             if completed & group:
                 continue
+            key = frozenset(group)
+            if key in seen_choice_groups:
+                continue
             opts = eligible_options(group, "one of")
             if len(opts) < 2:
                 continue
+            seen_choice_groups.add(key)
             menus.append(
                 {
                     "id": f"menu-{menu_id}",
@@ -436,6 +445,40 @@ def build_requirement_choice_menus(
                     "major": program,
                     "title": f"{program} — choose one",
                     "description": "Pick one course from this bulletin choice menu.",
+                    "need": 1,
+                    "options": opts,
+                }
+            )
+            menu_id += 1
+
+        # Bulletin OR / catalog equivalents (CHE 301 or CHE 312, BIO 205 or BIO 207, …).
+        alt_groups = extract_requirement_alternative_groups(text)
+        skipped_alts = _codes_skipped_by_completed_one_of(alt_groups, completed)
+        for group in iter_equivalent_choice_groups(text):
+            if completed & group:
+                continue
+            # Sub-groups like BIO 321/EBH 302 are done if BIO 320 already finished
+            # the broader genetics OR menu.
+            if group & skipped_alts:
+                continue
+            key = frozenset(group)
+            if key in seen_choice_groups:
+                continue
+            opts = eligible_options(group, "equivalent")
+            if len(opts) < 2:
+                continue
+            seen_choice_groups.add(key)
+            codes = ", ".join(sorted(group))
+            menus.append(
+                {
+                    "id": f"menu-{menu_id}",
+                    "kind": "equivalent",
+                    "major": program,
+                    "title": f"{program} — choose one equivalent course",
+                    "description": (
+                        f"These courses are either/or equivalents ({codes}). "
+                        "Pick the one you want — taking either one finishes this requirement."
+                    ),
                     "need": 1,
                     "options": opts,
                 }
@@ -477,8 +520,11 @@ def _remaining_required_courses(
             continue
         required = list(extracted.get("courses") or [])
         skip = _codes_skipped_by_completed_one_of(
-            extract_one_of_requirement_groups(extracted.get("requirements_text") or ""),
+            extract_requirement_alternative_groups(extracted.get("requirements_text") or ""),
             completed,
+        )
+        elective_menu = extract_elective_menu_codes(
+            extracted.get("requirements_text") or ""
         )
         spec_name = specs[index] if index < len(specs) else ""
         if spec_name:
@@ -486,7 +532,7 @@ def _remaining_required_courses(
                 if code not in required:
                     required.append(code)
         for code in required:
-            if code in seen or code in completed or code in skip:
+            if code in seen or code in completed or code in skip or code in elective_menu:
                 continue
             seen.add(code)
             remaining.append(code)
@@ -650,6 +696,7 @@ def build_schedule_deterministically(
     # Courses that belong to still-open choice menus should not be auto-filled
     # unless the student already picked them above.
     choice_menu_codes: set[str] = set()
+    alternative_groups: list[set[str]] = []
     for program_name in program_list:
         extracted = extract_program_course_mentions(program_name)
         if not extracted:
@@ -664,6 +711,20 @@ def build_schedule_deterministically(
             if _is_calc_sequence_group(group):
                 continue
             choice_menu_codes |= set(group)
+        for group in iter_equivalent_choice_groups(text):
+            # Hold both equivalents until the student picks one.
+            if not (completed & group):
+                choice_menu_codes |= set(group)
+        # Bulletin OR lines + catalog equivalents (BIO 205/207, CHE 301/312, …).
+        alternative_groups.extend(extract_requirement_alternative_groups(text))
+
+    def blocked_by_alternative(code: str) -> bool:
+        """True when another either/or option is already completed or on this draft."""
+        have = completed | selected_codes
+        for group in alternative_groups:
+            if code in group and (have & group) - {code}:
+                return True
+        return False
 
     # 1) Program roadmap (majors first in list, then minors) — gateway courses first.
     program_count = len(program_list)
@@ -707,6 +768,8 @@ def build_schedule_deterministically(
                 code = cand["course_code"]
                 if not allowed(code):
                     continue
+                if blocked_by_alternative(code):
+                    continue
                 # Don't auto-assign courses that belong to interactive choice menus.
                 if code in choice_menu_codes and code not in {
                     _normalize_code(c) for c in (chosen_requirement_courses or [])
@@ -725,6 +788,7 @@ def build_schedule_deterministically(
                         "MAT",
                         "CSE",
                         "ISE",
+                        "PHY",
                         "WRT",
                     }:
                         # Still allow if this is clearly the program's home dept acronym.
@@ -732,7 +796,10 @@ def build_schedule_deterministically(
                             w
                             for w in re.findall(r"\b[A-Z]{3}\b", major_name.upper())
                         }
-                        if dept not in home:
+                        if re.search(r"biochem|biology|chemistry", major_name, re.I):
+                            home |= {"BIO", "CHE", "PHY"}
+                        # Early bulletin science requirements (physics sequences, etc.).
+                        if dept not in home and int(cand.get("bulletin_position") or 999) >= 40:
                             continue
                 # Enforce one calculus sequence once any calc course is on the draft.
                 track_idx = None
@@ -830,14 +897,34 @@ def build_schedule_deterministically(
             if total_credits >= target:
                 break
             code = cand["course_code"]
+            if blocked_by_alternative(code):
+                continue
             if code in choice_menu_codes and code not in {
                 _normalize_code(c) for c in (chosen_requirement_courses or [])
             }:
                 continue
-            if (
+            dept = code.split()[0] if " " in code else code[:3]
+            major_name = str(cand.get("major") or "")
+            home = {w for w in re.findall(r"\b[A-Z]{3}\b", major_name.upper())}
+            # Biochemistry / Biology home depts also include BIO and CHE cores.
+            if re.search(r"biochem|biology|chemistry", major_name, re.I):
+                home |= {"BIO", "CHE", "PHY"}
+            in_home = dept in home or dept in major_name.upper() or dept in {
+                "AMS",
+                "MAT",
+                "CSE",
+                "ISE",
+                "PHY",
+            }
+            late_menu = (
                 int(cand.get("bulletin_position") or 999) >= 12
                 and int(cand.get("unlocks") or 0) < 2
-            ):
+            )
+            # Keep filling real major cores (e.g. BIO 310) even if they appear
+            # later in the bulletin than gateway courses.
+            if late_menu and not in_home and int(cand.get("bulletin_position") or 999) >= 40:
+                continue
+            if late_menu and not in_home and int(cand.get("level") or 9) <= 2:
                 continue
             idx = int(cand.get("major_index") or 0)
             program_name = cand.get("major") or (program_list[idx] if idx < len(program_list) else "")
