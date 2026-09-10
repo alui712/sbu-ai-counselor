@@ -357,9 +357,24 @@ def _hard_barriers_clear(
     return True
 
 
+def _has_college_calculus(completed: set[str]) -> bool:
+    """True if the student already completed Calc I (or higher) in any SBU track."""
+    have = {_normalize_code(c) for c in completed}
+    if have & CALC_I_GATEWAYS:
+        return True
+    return any(have & track for track in CALC_TRACK_SETS)
+
+
 def _is_superseded_by_progress(course_code: str, completed: set[str]) -> bool:
     """Skip intro/survey courses once the student is clearly past them."""
     code = _normalize_code(course_code)
+    have = {_normalize_code(c) for c in completed}
+
+    # Accounting / business bulletins: MAT 122 or MAT 123 "or a higher level calculus
+    # course" — AMS 151 / MAT 125 / MAT 131 / etc. already finish that requirement.
+    if code in PREP_MATH_COURSES and _has_college_calculus(have):
+        return True
+
     if " " not in code:
         return False
     dept, num_s = code.split()[0], code.split()[1]
@@ -369,7 +384,7 @@ def _is_superseded_by_progress(course_code: str, completed: set[str]) -> bool:
         return False
 
     same_dept = [
-        c for c in completed if c.startswith(dept + " ") and c != code
+        c for c in have if c.startswith(dept + " ") and c != code
     ]
     if not same_dept:
         return False
@@ -463,7 +478,9 @@ def extract_program_course_mentions(program_name: str) -> dict | None:
         return None
 
     text = match.get("requirements_text") or ""
-    notes_at = re.search(r"(?m)^Notes?:\s*$", text)
+    # Footnote blocks are usually titled "Notes:" (plural). Do not treat a lone
+    # early "Note:" (e.g. Accounting intro blurb) as the end of requirements.
+    notes_at = re.search(r"(?m)^Notes:\s*$", text)
     notes_start = notes_at.start() if notes_at else len(text)
     ordered: list[str] = []
     positions: dict[str, int] = {}
@@ -505,7 +522,7 @@ def extract_elective_menu_codes(requirements_text: str) -> set[str]:
         return set()
     blob = text[match.start() :]
     # Stop before Notes / sample plans so core courses mentioned later aren't marked elective.
-    cut = re.search(r"(?m)^(Notes?:|Sample Course|Honors Program|BCB\b)", blob)
+    cut = re.search(r"(?m)^(Notes:|Sample Course|Honors Program|BCB\b)", blob)
     if cut and cut.start() > 40:
         blob = blob[: cut.start()]
     return set(_extract_codes_from_blob(blob))
@@ -871,13 +888,17 @@ def _codes_skipped_by_completed_one_of(
     """If any option in a one-of menu is done, skip recommending the other options.
 
     Calculus sequences are excluded — AMS 151 must not hide AMS 161.
+    Prep/overview math (MAT 122/123) is also skipped once college calculus is done.
     """
     skip: set[str] = set()
+    have = {_normalize_code(c) for c in completed}
+    if _has_college_calculus(have):
+        skip |= PREP_MATH_COURSES - have
     for group in groups:
         if _is_calc_sequence_group(group):
             continue
-        if completed & group:
-            skip |= group - completed
+        if have & group:
+            skip |= group - have
     return skip
 
 

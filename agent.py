@@ -293,16 +293,15 @@ def build_requirement_choice_menus(
         for code in sorted(codes):
             if code in completed:
                 continue
+            if _is_superseded_by_progress(code, completed):
+                continue
             if not is_honors and _is_honors_course(code):
                 continue
             payload = _option_payload(code, list_tag=list_tag)
             if not payload:
                 continue
             # Still show bulletin options that need placement / soft barriers.
-            ready = (
-                _progress_prereqs_satisfied(code, completed, majors=programs)
-                and not _is_superseded_by_progress(code, completed)
-            )
+            ready = _progress_prereqs_satisfied(code, completed, majors=programs)
             payload["ready"] = ready
             if not ready:
                 payload["note"] = "May require placement or a prior course — confirm in SOLAR."
