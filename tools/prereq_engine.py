@@ -206,6 +206,9 @@ def _progress_prereqs_satisfied(
         has_placement = any(str(c).startswith("__") for c in group)
         if any(c in completed for c in course_opts):
             continue
+        # "MAT 122 or higher" — any college calculus sequence clears it.
+        if "MAT 122" in course_opts and _has_college_calculus(completed):
+            continue
         # Allow recommending Calc I when placement or only prep-math stands in the way.
         if is_calc_i and (
             has_placement or (course_opts and set(course_opts) <= PREP_MATH_COURSES)
@@ -334,18 +337,23 @@ def _hard_barriers_clear(
         if standing < need:
             return False
 
-    # "CSE, ISE or DAS major" style restrictions.
-    for match in MAJOR_RESTRICT_RE.finditer(text):
-        raw = match.group(1).upper()
-        needed = {
-            p.strip()
-            for p in re.split(r",|\bor\b", raw)
-            if p.strip() and p.strip() in KNOWN_MAJOR_DEPTS
-        }
-        if needed and not (needed & _declared_major_depts(majors)):
-            # If the student declared no majors at all, be conservative.
-            if not majors:
-                return False
+    # "CSE, ISE or DAS major" / "BUS major or ACC minor or ISE Major" style
+    # restrictions are alternatives — any matching declared dept clears them.
+    major_matches = list(MAJOR_RESTRICT_RE.finditer(text))
+    if major_matches:
+        needed: set[str] = set()
+        for match in major_matches:
+            raw = match.group(1).upper()
+            needed |= {
+                p.strip()
+                for p in re.split(r",|\bor\b", raw)
+                if p.strip() and p.strip() in KNOWN_MAJOR_DEPTS
+            }
+        # "ACC minor" is also accepted in many College of Business prereqs.
+        if re.search(r"\bACC\s+minor\b", text, re.I):
+            needed.add("ACC")
+        declared = _declared_major_depts(majors)
+        if needed and not (needed & declared):
             return False
 
     if DEC_E_OR_SNW_RE.search(text) and SBC_OR_DEC_PREREQ_RE.search(text):

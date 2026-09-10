@@ -19,6 +19,7 @@ from agent import (  # noqa: E402
     build_requirement_choice_menus,
     build_sbc_options_menu,
     build_schedule_deterministically,
+    build_graduation_path,
     counselor_chat,
     format_schedule_with_llm,
     _extract_completed_courses,
@@ -90,6 +91,7 @@ class IntakeRequest(BaseModel):
     minors: list[str] = Field(default_factory=list)
     specializations: list[str] = Field(default_factory=list)
     chosen_requirement_courses: list[str] = Field(default_factory=list)
+    lock_semester_courses: bool = False
     is_honors: bool = False
 
 
@@ -202,6 +204,7 @@ def _normalize_intake(body: IntakeRequest) -> dict:
         "chosen_requirement_courses": [
             str(c).strip() for c in (body.chosen_requirement_courses or []) if str(c).strip()
         ],
+        "lock_semester_courses": bool(getattr(body, "lock_semester_courses", False)),
         "is_honors": bool(body.is_honors),
         "sbc_gaps": [tag for tag in KNOWN_SBC_TAGS if tag not in set(completed_sbcs)],
     }
@@ -258,8 +261,17 @@ def core_schedule(body: CoreRequest):
         is_honors=intake["is_honors"],
         specializations=intake.get("specializations"),
         chosen_requirement_courses=intake.get("chosen_requirement_courses"),
+        lock_semester_courses=False,
     )
-    return {"intake": intake, "schedule": schedule}
+    path = build_graduation_path(
+        majors=intake["majors"],
+        minors=intake.get("minors") or [],
+        completed_courses=intake["completed_courses"],
+        specializations=intake.get("specializations"),
+        suggested_courses=[c["course_code"] for c in schedule.get("courses") or []],
+        is_honors=intake["is_honors"],
+    )
+    return {"intake": intake, "schedule": schedule, "path": path}
 
 
 @app.post("/api/sbc-options")
@@ -279,6 +291,7 @@ def sbc_options(body: SbcOptionsRequest):
         is_honors=intake["is_honors"],
         specializations=intake.get("specializations"),
         chosen_requirement_courses=intake.get("chosen_requirement_courses"),
+        lock_semester_courses=bool(intake.get("lock_semester_courses")),
     )
     already += [c["course_code"] for c in core["courses"]]
     options = build_sbc_options_menu(
@@ -325,6 +338,7 @@ def finalize(body: FinalizeRequest):
         is_honors=intake["is_honors"],
         specializations=intake.get("specializations"),
         chosen_requirement_courses=intake.get("chosen_requirement_courses"),
+        lock_semester_courses=bool(intake.get("lock_semester_courses")),
     )
     intake["chosen_sbc_courses"] = body.chosen_sbc_courses
     markdown = format_schedule_with_llm(schedule, intake)

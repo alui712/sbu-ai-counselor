@@ -8,6 +8,9 @@ const state = {
   menus: [],
   menuSelections: {}, // menuId -> Set(course codes)
   core: null,
+  path: null,
+  pathSelected: new Set(),
+  pathNodes: {},
   options: [],
   selectedSbcs: new Set(),
   final: null,
@@ -592,11 +595,27 @@ async function buildCoreFromIntake() {
   state.intake = data.intake;
   state.core = data.schedule;
   state.selectedSbcs = new Set();
+  state.path = data.path || null;
+  state.pathNodes = {};
+  state.pathSelected = new Set();
+  for (const stage of data.path?.stages || []) {
+    for (const node of stage.nodes || []) {
+      state.pathNodes[node.course_code] = node;
+      if (node.selected) state.pathSelected.add(node.course_code);
+    }
+  }
+  // Fall back to auto schedule picks if path had no selections.
+  if (!state.pathSelected.size) {
+    for (const course of data.schedule.courses || []) {
+      state.pathSelected.add(course.course_code);
+    }
+  }
+  syncCoreFromPathSelection();
   const gaps = data.schedule.sbc_gaps || [];
   const note = data.schedule.degree_note || "";
   $("#core-summary").textContent = note
     ? note
-    : `${data.schedule.total_credits} credits locked from major progression` +
+    : `${state.core.total_credits} credits locked from major progression` +
       ` · target ${data.intake.target_credits}` +
       (gaps.length ? ` · ${gaps.length} SBC gaps left` : "");
   const toSbc = $("#to-sbc");
@@ -605,9 +624,155 @@ async function buildCoreFromIntake() {
       ? "Choose SBC electives"
       : "Review remaining classes";
   }
-  renderCourseList($("#core-list"), data.schedule.courses || []);
+  renderGraduationPath();
   refreshChoiceBackButtons();
   goToPlan("core");
+}
+
+function selectedPathCourses() {
+  return [...state.pathSelected];
+}
+
+function pathSelectionCredits() {
+  return selectedPathCourses().reduce((sum, code) => {
+    const node = state.pathNodes[code];
+    return sum + (node?.credits || 0);
+  }, 0);
+}
+
+function syncCoreFromPathSelection() {
+  const courses = selectedPathCourses()
+    .map((code) => {
+      const node = state.pathNodes[code];
+      if (!node) return null;
+      return {
+        course_code: node.course_code,
+        title: node.title,
+        credits: node.credits,
+        sbcs: node.sbcs || [],
+        role: "core",
+      };
+    })
+    .filter(Boolean);
+  if (!state.core) state.core = {};
+  state.core.courses = courses;
+  state.core.total_credits = courses.reduce((sum, c) => sum + (c.credits || 0), 0);
+  renderCourseList($("#core-list"), courses);
+  const meta = $("#grad-path-credits");
+  if (meta) {
+    meta.textContent = `${state.core.total_credits} credits selected · ${courses.length} classes`;
+  }
+  if (state.intake) {
+    const gaps = state.core.sbc_gaps || state.intake.sbc_gaps || [];
+    if (!$("#core-summary").textContent.includes("only need")) {
+      $("#core-summary").textContent =
+        `${state.core.total_credits} credits selected for this semester` +
+        ` · target ${state.intake.target_credits}` +
+        (gaps.length ? ` · ${gaps.length} SBC gaps left` : "");
+    }
+  }
+}
+
+function renderGraduationPath() {
+  const root = $("#grad-path-track");
+  const wrap = $("#grad-path");
+  if (!root || !wrap) return;
+  const stages = state.path?.stages || [];
+  if (!stages.length) {
+    wrap.classList.add("is-hidden");
+    root.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("is-hidden");
+  const branches = state.path?.branches || [];
+  const branchMap = Object.fromEntries(branches.map((b) => [b.id, b]));
+
+  root.innerHTML = stages
+    .map((stage) => {
+      const nodes = stage.nodes || [];
+      const grouped = new Map();
+      const singles = [];
+      for (const node of nodes) {
+        if (node.group_id && branchMap[node.group_id]) {
+          if (!grouped.has(node.group_id)) grouped.set(node.group_id, []);
+          grouped.get(node.group_id).push(node);
+        } else singles.push(node);
+      }
+      const parts = [];
+      for (const [gid, groupNodes] of grouped.entries()) {
+        const branch = branchMap[gid];
+        parts.push(`
+          <div class="grad-branch" data-branch="${escapeHtml(gid)}">
+            <div class="grad-branch-label">${escapeHtml(branch?.label || "Pick one")}</div>
+            ${groupNodes.map((n) => pathNodeHtml(n)).join("")}
+          </div>`);
+      }
+      for (const node of singles) parts.push(pathNodeHtml(node));
+      if (!parts.length) {
+        parts.push(`<p class="lede">No courses in this stage.</p>`);
+      }
+      return `
+        <section class="grad-stage" data-stage="${escapeHtml(stage.id)}">
+          <h4 class="grad-stage-title">${escapeHtml(stage.title)}</h4>
+          <div class="grad-stage-nodes">${parts.join("")}</div>
+        </section>`;
+    })
+    .join("");
+
+  root.querySelectorAll(".grad-node.is-selectable").forEach((btn) => {
+    btn.addEventListener("click", () => togglePathNode(btn.dataset.code));
+  });
+  syncCoreFromPathSelection();
+}
+
+function pathNodeHtml(node) {
+  const selected = state.pathSelected.has(node.course_code);
+  const classes = [
+    "grad-node",
+    node.status === "done" ? "is-done" : "",
+    node.status === "later" ? "is-later" : "",
+    node.selectable ? "is-selectable" : "",
+    selected ? "is-selected" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const title = (node.title || node.course_code).replace(/^[^:]+:\s*/, "");
+  return `
+    <button type="button" class="${classes}" data-code="${escapeHtml(node.course_code)}"
+      ${node.selectable ? "" : "disabled"}
+      aria-pressed="${selected ? "true" : "false"}">
+      <strong>${escapeHtml(node.course_code)}</strong>
+      <span>${escapeHtml(title)} · ${node.credits || 0} cr</span>
+    </button>`;
+}
+
+function togglePathNode(code) {
+  const node = state.pathNodes[code];
+  if (!node?.selectable) return;
+  const target = Math.max(12, Math.min(Number(state.intake?.target_credits) || 15, 18));
+  if (state.pathSelected.has(code)) {
+    state.pathSelected.delete(code);
+  } else {
+    // Either/or: only one option from a branch.
+    if (node.group_id) {
+      for (const [other, info] of Object.entries(state.pathNodes)) {
+        if (info.group_id === node.group_id && other !== code) {
+          state.pathSelected.delete(other);
+        }
+      }
+    }
+    const nextCredits = pathSelectionCredits() + (node.credits || 0);
+    if (nextCredits > Math.max(target, 17)) {
+      showToast(`That would exceed about ${Math.max(target, 17)} credits for this semester.`, true);
+      return;
+    }
+    state.pathSelected.add(code);
+  }
+  renderGraduationPath();
+}
+
+function allChosenRequirementCourses() {
+  return [...new Set([...selectedRequirementCourses(), ...selectedPathCourses()])];
 }
 
 function renderCourseList(el, courses) {
@@ -772,6 +937,9 @@ function resetPlanViews() {
   state.menus = [];
   state.menuSelections = {};
   state.core = null;
+  state.path = null;
+  state.pathSelected = new Set();
+  state.pathNodes = {};
   state.options = [];
   state.selectedSbcs = new Set();
   state.final = null;
@@ -1124,6 +1292,8 @@ async function init() {
     const data = await postJSON("/api/sbc-options", {
       ...state.intake,
       completed_courses: state.intake.completed_courses,
+      chosen_requirement_courses: allChosenRequirementCourses(),
+      lock_semester_courses: true,
       already_selected: [],
       max_credits: 6,
       per_tag_limit: 0,
@@ -1205,6 +1375,8 @@ async function init() {
       const data = await postJSON("/api/finalize", {
         ...state.intake,
         completed_courses: state.intake.completed_courses,
+        chosen_requirement_courses: allChosenRequirementCourses(),
+        lock_semester_courses: true,
         chosen_sbc_courses: [...state.selectedSbcs],
       });
       state.final = data;

@@ -207,6 +207,20 @@
             <button class="btn ghost" type="button" id="reset-core">Reset</button>
           </div>
           <div class="course-list" id="core-list"></div>
+          <section class="grad-path" id="grad-path" aria-label="Graduation path">
+            <div class="grad-path-header">
+              <div>
+                <p class="eyebrow">Path to graduation</p>
+                <h3>Click ready classes to build this semester</h3>
+                <p class="lede" id="grad-path-meta">
+                  Select from the options your bulletin still requires. Branched
+                  nodes are either/or — pick one.
+                </p>
+              </div>
+              <div class="pick-meta" id="grad-path-credits">0 credits selected</div>
+            </div>
+            <div class="grad-path-track" id="grad-path-track"></div>
+          </section>
           <div class="actions">
             <button class="btn ghost" type="button" id="back-to-choices">
               Back to change picks
@@ -333,6 +347,6 @@
 
     <div class="toast is-hidden" id="toast" role="status"></div>
 
-    <script src="/static/app.js?v=3" type="module"></script>
+    <script src="/static/app.js?v=4" type="module"></script>
   </body>
 </html>

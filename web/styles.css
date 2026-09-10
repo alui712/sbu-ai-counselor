@@ -618,6 +618,136 @@ select:focus,
   font-size: 0.82rem;
 }
 
+.grad-path {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.grad-path-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.grad-path-header h3 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.grad-path-track {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding: 0.35rem 0.15rem 0.85rem;
+  scroll-snap-type: x proximity;
+}
+
+.grad-stage {
+  flex: 0 0 min(280px, 78vw);
+  scroll-snap-align: start;
+  background: linear-gradient(180deg, #fafbfc 0%, #fff 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  position: relative;
+}
+
+.grad-stage + .grad-stage::before {
+  content: "→";
+  position: absolute;
+  left: -0.85rem;
+  top: 1.1rem;
+  color: var(--muted);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.grad-stage-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.grad-stage-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.grad-branch {
+  border: 1px dashed #c9d0d8;
+  border-radius: 10px;
+  padding: 0.45rem;
+  background: #f7f9fb;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.grad-branch-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--sbu-red, #990000);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.grad-node {
+  display: grid;
+  gap: 0.12rem;
+  text-align: left;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  background: white;
+  cursor: default;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.grad-node strong {
+  font-size: 0.86rem;
+}
+
+.grad-node span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.grad-node.is-selectable {
+  cursor: pointer;
+}
+
+.grad-node.is-selectable:hover {
+  border-color: #b42318;
+  box-shadow: 0 4px 14px rgba(180, 35, 24, 0.08);
+  transform: translateY(-1px);
+}
+
+.grad-node.is-selected {
+  border-color: #990000;
+  background: #fff5f5;
+  box-shadow: inset 0 0 0 1px rgba(153, 0, 0, 0.15);
+}
+
+.grad-node.is-done {
+  opacity: 0.72;
+  background: #f3f5f7;
+}
+
+.grad-node.is-later {
+  opacity: 0.85;
+}
+
+.grad-node:disabled {
+  cursor: not-allowed;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

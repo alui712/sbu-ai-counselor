@@ -538,6 +538,207 @@ def _remaining_required_courses(
     return remaining
 
 
+def build_graduation_path(
+    majors: list[str],
+    completed_courses: list[str],
+    *,
+    minors: list[str] | None = None,
+    specializations: list[str] | None = None,
+    suggested_courses: list[str] | None = None,
+    is_honors: bool = False,
+) -> dict:
+    """Build a clickable degree-path graph: completed → ready → later.
+
+    Either/or equivalents become branch groups so the student can pick one option.
+    Suggested courses (from the auto semester draft) start selected.
+    """
+    program_list = [m for m in (majors or []) if m] + [m for m in (minors or []) if m]
+    completed = {_normalize_code(c) for c in completed_courses}
+    suggested = {_normalize_code(c) for c in (suggested_courses or [])}
+    spec_list = [str(s or "").strip() for s in (specializations or [])]
+
+    remaining = _remaining_required_courses(program_list, completed, spec_list)
+    # Keep a short completed slice for path context (recent major-relevant courses).
+    done_nodes: list[dict] = []
+    seen_done: set[str] = set()
+    for program_name in program_list:
+        extracted = extract_program_course_mentions(program_name)
+        if not extracted:
+            continue
+        for code in extracted.get("courses") or []:
+            if code not in completed or code in seen_done:
+                continue
+            if _is_superseded_by_progress(code, completed - {code}):
+                continue
+            rec = _course_record(code, "done")
+            if not rec:
+                continue
+            done_nodes.append(
+                {
+                    **{k: rec[k] for k in ("course_code", "title", "credits", "sbcs")},
+                    "status": "done",
+                    "selectable": False,
+                    "selected": False,
+                    "group_id": None,
+                }
+            )
+            seen_done.add(code)
+            if len(done_nodes) >= 10:
+                break
+        if len(done_nodes) >= 10:
+            break
+
+    alt_groups = []
+    for program_name in program_list:
+        extracted = extract_program_course_mentions(program_name)
+        if not extracted:
+            continue
+        alt_groups.extend(
+            extract_requirement_alternative_groups(
+                extracted.get("requirements_text") or ""
+            )
+        )
+        alt_groups.extend(
+            iter_equivalent_choice_groups(extracted.get("requirements_text") or "")
+        )
+
+    # Deduplicate alternative groups; only keep ones that still matter.
+    branch_groups: list[dict] = []
+    used_in_branch: set[str] = set()
+    seen_group: set[frozenset[str]] = set()
+    group_id = 0
+    for group in alt_groups:
+        key = frozenset(group)
+        if len(key) < 2 or key in seen_group:
+            continue
+        if any(_calc_track_index_safe(c) is not None for c in key):
+            continue
+        open_opts = [
+            c
+            for c in sorted(group)
+            if c not in completed and not _is_superseded_by_progress(c, completed)
+        ]
+        if completed & group:
+            continue
+        if len(open_opts) < 2:
+            continue
+        # Prefer clean student-facing groups.
+        depts = {c.split()[0] for c in open_opts}
+        if depts == {"PHY"}:
+            continue
+        seen_group.add(key)
+        gid = f"branch-{group_id}"
+        group_id += 1
+        branch_groups.append(
+            {
+                "id": gid,
+                "label": "Pick one",
+                "options": open_opts,
+            }
+        )
+        used_in_branch |= set(open_opts)
+
+    code_to_group = {
+        code: branch["id"]
+        for branch in branch_groups
+        for code in branch["options"]
+    }
+
+    ready_nodes: list[dict] = []
+    later_nodes: list[dict] = []
+    placed: set[str] = set()
+
+    def make_node(code: str, status: str) -> dict | None:
+        if not is_honors and _is_honors_course(code):
+            return None
+        rec = _course_record(code, status)
+        if not rec:
+            return None
+        selectable = status == "ready"
+        selected = selectable and code in suggested
+        return {
+            "course_code": rec["course_code"],
+            "title": rec["title"],
+            "credits": rec["credits"],
+            "sbcs": rec["sbcs"],
+            "status": status,
+            "selectable": selectable,
+            "selected": selected,
+            "group_id": code_to_group.get(code),
+        }
+
+    for code in remaining:
+        if code in placed or code in completed:
+            continue
+        if _is_superseded_by_progress(code, completed):
+            continue
+        ready = _progress_prereqs_satisfied(
+            code, completed, majors=program_list
+        ) and _hard_barriers_clear(
+            (COURSES.get(code) or {}).get("prerequisites") or "",
+            completed,
+            majors=program_list,
+        )
+        node = make_node(code, "ready" if ready else "later")
+        if not node:
+            continue
+        if ready:
+            ready_nodes.append(node)
+        else:
+            later_nodes.append(node)
+        placed.add(code)
+
+    # Keep auto-draft picks visible even if they came from outside the hard remaining set.
+    for code in suggested:
+        if code in placed or code in completed:
+            continue
+        node = make_node(code, "ready")
+        if node:
+            node["selected"] = True
+            ready_nodes.insert(0, node)
+            placed.add(code)
+
+    # Cap path length for UI readability; keep all selected + branch mates.
+    def trim(nodes: list[dict], limit: int) -> list[dict]:
+        if len(nodes) <= limit:
+            return nodes
+        keep = [n for n in nodes if n.get("selected") or n.get("group_id")]
+        rest = [n for n in nodes if n not in keep]
+        return (keep + rest)[:limit]
+
+    ready_nodes = trim(ready_nodes, 18)
+    later_nodes = trim(later_nodes, 16)
+
+    return {
+        "stages": [
+            {
+                "id": "done",
+                "title": "Completed",
+                "nodes": done_nodes[-8:],
+            },
+            {
+                "id": "ready",
+                "title": "Ready now — click to add or remove",
+                "nodes": ready_nodes,
+            },
+            {
+                "id": "later",
+                "title": "Later (prereqs still open)",
+                "nodes": later_nodes,
+            },
+        ],
+        "branches": branch_groups,
+        "suggested": sorted(suggested),
+    }
+
+
+def _calc_track_index_safe(code: str) -> int | None:
+    for i, track in enumerate(CALC_TRACK_SETS):
+        if code in track:
+            return i
+    return None
+
+
 def build_schedule_deterministically(
     completed_courses: list[str],
     major: str | None = None,
@@ -550,6 +751,7 @@ def build_schedule_deterministically(
     is_honors: bool = False,
     specializations: list[str] | None = None,
     chosen_requirement_courses: list[str] | None = None,
+    lock_semester_courses: bool = False,
 ) -> dict:
     """Resolve a semester schedule from catalog data without calling an LLM.
 
@@ -688,7 +890,7 @@ def build_schedule_deterministically(
         total_credits += record["credits"]
         return True
 
-    # Student-picked bulletin menu courses first (natural science / one-of lists).
+    # Student-picked bulletin menu / path-selected semester courses first.
     for code in chosen_requirement_courses or []:
         try_add(code, "core:choice", soft_placement=True)
 
@@ -733,6 +935,9 @@ def build_schedule_deterministically(
     if program_count >= 3:
         core_target = 5
     core_target = max(core_target, progress_count())
+    # Path-locked semesters keep only the student's clicked courses.
+    if lock_semester_courses:
+        core_target = progress_count()
     roadmap = rank_major_progress_courses(
         program_list,
         completed | selected_codes,
@@ -844,7 +1049,7 @@ def build_schedule_deterministically(
         )
         for m in major_list
     )
-    if stem_like and progress_count() < core_target:
+    if (not lock_semester_courses) and stem_like and progress_count() < core_target:
         for code in CORE_PRIORITIES:
             if progress_count() >= core_target:
                 break
@@ -853,7 +1058,7 @@ def build_schedule_deterministically(
             ):
                 try_add(code, "core")
 
-    if stem_like and progress_count() < core_target:
+    if (not lock_semester_courses) and stem_like and progress_count() < core_target:
         for code in [
             "CSE 114",
             "AMS 151",
@@ -876,7 +1081,7 @@ def build_schedule_deterministically(
                 try_add(code, "core")
 
     # 2) Writing requirement if WRT SBC not already completed.
-    if "WRT" not in done_sbcs and "WRT 102" not in completed:
+    if (not lock_semester_courses) and "WRT" not in done_sbcs and "WRT 102" not in completed:
         if try_add("WRT 102", "gen_ed", soft_placement=True):
             done_sbcs.add("WRT")
 
@@ -891,7 +1096,7 @@ def build_schedule_deterministically(
     # 4) Add more required major/minor courses if they fit. Never invent SBC
     # classes just to hit the credit slider once those requirements are done.
     open_sbc_gaps = [tag for tag in KNOWN_SBC_TAGS if tag not in done_sbcs]
-    if total_credits < target:
+    if (not lock_semester_courses) and total_credits < target:
         for cand in roadmap:
             if total_credits >= target:
                 break
@@ -936,7 +1141,7 @@ def build_schedule_deterministically(
             try_add(code, role)
 
     # Only fill leftover credits with an SBC course when that tag is still open.
-    if auto_fill_sbcs and open_sbc_gaps and total_credits < target:
+    if auto_fill_sbcs and (not lock_semester_courses) and open_sbc_gaps and total_credits < target:
         preferred_by_sbc = {
             "ARTS": "ARH 201",
             "HUM": "PHI 108",
